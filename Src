@@ -1,1 +1,80 @@
+documents = [
+    "Machine Learning is a branch of Artificial Intelligence that enables systems to learn from data.",
+    "Python is a popular programming language used in AI and Data Science.",
+    "RAG stands for Retrieval-Augmented Generation. It combines retrieval and generation for better answers.",
+    "Neural Networks are computational models inspired by the human brain.",
+    "Deep Learning is a subfield of Machine Learning that uses many-layered neural networks.",
+    "Transformers are powerful sequence models widely used in natural language processing.",
+    "Supervised learning uses labeled data, while unsupervised learning finds patterns without labels.",
+    "Evaluation metrics like accuracy, precision, recall, and F1 score measure model performance."
+]
 
+import re
+
+def normalize_word(word):
+    if word.endswith("ies") and len(word) > 4:
+        return word[:-3] + "y"
+    if word.endswith("s") and len(word) > 3:
+        return word[:-1]
+    return word
+
+
+def tokenize(text):
+    return [normalize_word(word) for word in re.findall(r"\b[a-z0-9]+\b", text.lower())]
+
+
+def retrieve(query, top_k=2):
+    stopwords = {
+        "the", "is", "a", "an", "of", "and", "to", "in", "for", "that",
+        "what", "how", "does", "do", "are", "from", "with", "by"
+    }
+    query_words = [word for word in tokenize(query) if word not in stopwords]
+
+    if not query_words:
+        return [], query_words
+
+    scored_docs = []
+
+    for doc in documents:
+        doc_words = set(tokenize(doc))
+        score = sum(word in doc_words for word in query_words)
+        scored_docs.append((score, doc))
+
+    scored_docs.sort(reverse=True, key=lambda item: item[0])
+
+    top_results = [(doc, score) for score, doc in scored_docs if score > 0][:top_k]
+    return top_results, query_words
+
+
+def describe_results(results):
+    if not results:
+        return "No matching document found."
+    lines = []
+    for index, (doc, score) in enumerate(results, start=1):
+        lines.append(f"{index}. [score={score}] {doc}")
+    return "\n".join(lines)
+
+print("Educational RAG Assistant")
+print("Type 'exit' to quit")
+print("This demo matches your question keywords against a small knowledge base of AI and programming concepts.")
+
+while True:
+    question = input("\nAsk a question: ")
+
+    if question.strip().lower() == "exit":
+        break
+
+    results, query_words = retrieve(question)
+
+    if query_words:
+        print("Keywords used:", ", ".join(query_words))
+    else:
+        print("No meaningful keywords found in the question.")
+
+    if results:
+        print("\nTop matching document(s):")
+        print(describe_results(results))
+        print("\nAnswer:", results[0][0])
+    else:
+        print("\nSorry, I couldn't find relevant information.")
+        print("Try asking about AI topics like Python, Neural Networks, Transformers, or evaluation metrics.")
