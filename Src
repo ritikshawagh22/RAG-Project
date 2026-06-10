@@ -1,80 +1,263 @@
-documents = [
-    "Machine Learning is a branch of Artificial Intelligence that enables systems to learn from data.",
-    "Python is a popular programming language used in AI and Data Science.",
-    "RAG stands for Retrieval-Augmented Generation. It combines retrieval and generation for better answers.",
-    "Neural Networks are computational models inspired by the human brain.",
-    "Deep Learning is a subfield of Machine Learning that uses many-layered neural networks.",
-    "Transformers are powerful sequence models widely used in natural language processing.",
-    "Supervised learning uses labeled data, while unsupervised learning finds patterns without labels.",
-    "Evaluation metrics like accuracy, precision, recall, and F1 score measure model performance."
-]
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
 
-import re
+import numpy as np
+from pypdf import PdfReader
+from openai import OpenAI
 
-def normalize_word(word):
-    if word.endswith("ies") and len(word) > 4:
-        return word[:-3] + "y"
-    if word.endswith("s") and len(word) > 3:
-        return word[:-1]
-    return word
+# ==========================
+# CONFIGURATION
+# ==========================
 
+API_KEY = "YOUR_OPENAI_API_KEY"
 
-def tokenize(text):
-    return [normalize_word(word) for word in re.findall(r"\b[a-z0-9]+\b", text.lower())]
+client = OpenAI(api_key=API_KEY)
 
+knowledge_chunks = []
+knowledge_embeddings = []
 
-def retrieve(query, top_k=2):
-    stopwords = {
-        "the", "is", "a", "an", "of", "and", "to", "in", "for", "that",
-        "what", "how", "does", "do", "are", "from", "with", "by"
-    }
-    query_words = [word for word in tokenize(query) if word not in stopwords]
+# ==========================
+# PDF LOADING
+# ==========================
 
-    if not query_words:
-        return [], query_words
+def load_pdf(pdf_path):
 
-    scored_docs = []
+    reader = PdfReader(pdf_path)
 
-    for doc in documents:
-        doc_words = set(tokenize(doc))
-        score = sum(word in doc_words for word in query_words)
-        scored_docs.append((score, doc))
+    text = ""
 
-    scored_docs.sort(reverse=True, key=lambda item: item[0])
+    for page in reader.pages:
+        page_text = page.extract_text()
 
-    top_results = [(doc, score) for score, doc in scored_docs if score > 0][:top_k]
-    return top_results, query_words
+        if page_text:
+            text += page_text + "\n"
 
+    return text
 
-def describe_results(results):
-    if not results:
-        return "No matching document found."
-    lines = []
-    for index, (doc, score) in enumerate(results, start=1):
-        lines.append(f"{index}. [score={score}] {doc}")
-    return "\n".join(lines)
+# ==========================
+# TEXT CHUNKING
+# ==========================
 
-print("Educational RAG Assistant")
-print("Type 'exit' to quit")
-print("This demo matches your question keywords against a small knowledge base of AI and programming concepts.")
+def split_text(text, chunk_size=1000, overlap=200):
 
-while True:
-    question = input("\nAsk a question: ")
+    chunks = []
 
-    if question.strip().lower() == "exit":
-        break
+    start = 0
 
-    results, query_words = retrieve(question)
+    while start < len(text):
 
-    if query_words:
-        print("Keywords used:", ", ".join(query_words))
-    else:
-        print("No meaningful keywords found in the question.")
+        end = start + chunk_size
 
-    if results:
-        print("\nTop matching document(s):")
-        print(describe_results(results))
-        print("\nAnswer:", results[0][0])
-    else:
-        print("\nSorry, I couldn't find relevant information.")
-        print("Try asking about AI topics like Python, Neural Networks, Transformers, or evaluation metrics.")
+        chunks.append(text[start:end])
+
+        start += chunk_size - overlap
+
+    return chunks
+
+# ==========================
+# EMBEDDINGS
+# ==========================
+
+def create_embedding(text):
+
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=text
+    )
+
+    return response.data[0].embedding
+
+# ==========================
+# COSINE SIMILARITY
+# ==========================
+
+def cosine_similarity(v1, v2):
+
+    v1 = np.array(v1)
+    v2 = np.array(v2)
+
+    return np.dot(v1, v2) / (
+        np.linalg.norm(v1) * np.linalg.norm(v2)
+    )
+
+# ==========================
+# BUILD KNOWLEDGE BASE
+# ==========================
+
+def build_knowledge_base(pdf_path):
+
+    global knowledge_chunks
+    global knowledge_embeddings
+
+    knowledge_chunks.clear()
+    knowledge_embeddings.clear()
+
+    text = load_pdf(pdf_path)
+
+    chunks = split_text(text)
+
+    status_label.config(
+        text=f"Processing {len(chunks)} chunks..."
+    )
+
+    root.update()
+
+    for chunk in chunks:
+
+        embedding = create_embedding(chunk)
+
+        knowledge_chunks.append(chunk)
+        knowledge_embeddings.append(embedding)
+
+    status_label.config(
+        text="Knowledge Base Ready"
+    )
+
+# ==========================
+# RETRIEVE CONTEXT
+# ==========================
+
+def retrieve_context(question):
+
+    question_embedding = create_embedding(question)
+
+    scores = []
+
+    for idx, emb in enumerate(
+        knowledge_embeddings
+    ):
+
+        score = cosine_similarity(
+            question_embedding,
+            emb
+        )
+
+        scores.append((score, idx))
+
+    scores.sort(reverse=True)
+
+    context = ""
+
+    for score, idx in scores[:3]:
+        context += knowledge_chunks[idx]
+        context += "\n\n"
+
+    return context
+
+# ==========================
+# ASK QUESTION
+# ==========================
+
+def ask_question():
+
+    question = question_entry.get()
+
+    if not question:
+        return
+
+    context = retrieve_context(question)
+
+    prompt = f"""
+You are an educational tutor.
+
+Answer only using the context.
+
+Context:
+{context}
+
+Question:
+{question}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        temperature=0.2
+    )
+
+    answer = response.choices[0].message.content
+
+    answer_box.delete("1.0", tk.END)
+    answer_box.insert(tk.END, answer)
+
+# ==========================
+# PDF UPLOAD
+# ==========================
+
+def upload_pdf():
+
+    pdf_path = filedialog.askopenfilename(
+        filetypes=[("PDF Files", "*.pdf")]
+    )
+
+    if pdf_path:
+
+        build_knowledge_base(pdf_path)
+
+        messagebox.showinfo(
+            "Success",
+            "PDF Loaded Successfully"
+        )
+
+# ==========================
+# GUI
+# ==========================
+
+root = tk.Tk()
+
+root.title("Educational RAG Tutor")
+
+root.geometry("800x600")
+
+title = tk.Label(
+    root,
+    text="Educational RAG Tutor",
+    font=("Arial", 18, "bold")
+)
+
+title.pack(pady=10)
+
+upload_btn = tk.Button(
+    root,
+    text="Upload PDF",
+    command=upload_pdf
+)
+
+upload_btn.pack()
+
+status_label = tk.Label(
+    root,
+    text="No PDF Loaded"
+)
+
+status_label.pack(pady=5)
+
+question_entry = tk.Entry(
+    root,
+    width=80
+)
+
+question_entry.pack(pady=10)
+
+ask_btn = tk.Button(
+    root,
+    text="Ask Question",
+    command=ask_question
+)
+
+ask_btn.pack()
+
+answer_box = scrolledtext.ScrolledText(
+    root,
+    width=90,
+    height=20
+)
+
+answer_box.pack(pady=10)
+
+root.mainloop()
